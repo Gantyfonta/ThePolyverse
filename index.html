@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Low-Poly AR Gateway</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #000; 
+            font-family: sans-serif;
+        }
+        canvas { 
+            display: block; 
+            width: 100vw; 
+            height: 100vh; 
+        }
+        #video { 
+            display: none; 
+        }
+        #ui {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h2 id="status">Accessing Gateway...</h2>
+        <p>Please allow camera permissions.</p>
+    </div>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const ui = document.getElementById('ui');
+
+        // Dynamically resize canvas to fit the screen
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Offscreen canvas used to sample the raw video colors
+        const offCanvas = document.createElement('canvas');
+        const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
+
+        // Request access to the user's rear-facing camera
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' }
+        }).then(stream => {
+            video.srcObject = stream;
+            video.play();
+            ui.style.display = 'none'; // Hide loading text
+            requestAnimationFrame(processFrame);
+        }).catch(err => {
+            document.getElementById('status').innerText = "Gateway Access Denied";
+            console.error("Camera access denied or unavailable: ", err);
+        });
+
+        const gridSize = 40; // Adjust this to make the polygons larger or smaller
+
+        function processFrame() {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                offCanvas.width = canvas.width;
+                offCanvas.height = canvas.height;
+                
+                // Scale the video to cover the entire screen
+                const vRatio = canvas.width / video.videoWidth;
+                const hRatio = canvas.height / video.videoHeight;
+                const ratio = Math.max(vRatio, hRatio);
+                const centerShift_x = (canvas.width - video.videoWidth * ratio) / 2;
+                const centerShift_y = (canvas.height - video.videoHeight * ratio) / 2;  
+
+                offCtx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight,
+                                 centerShift_x, centerShift_y, video.videoWidth * ratio, video.videoHeight * ratio);
+
+                // Get pixel data from the hidden video canvas
+                const imgData = offCtx.getImageData(0, 0, canvas.width, canvas.height).data;
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Loop through the screen in a grid to draw the polygons
+                for (let y = 0; y < canvas.height; y += gridSize) {
+                    for (let x = 0; x < canvas.width; x += gridSize) {
+                        
+                        // Sample the pixel right in the middle of our current grid cell
+                        const sampleX = Math.min(x + gridSize / 2, canvas.width - 1);
+                        const sampleY = Math.min(y + gridSize / 2, canvas.height - 1);
+                        const i = (Math.floor(sampleY) * canvas.width + Math.floor(sampleX)) * 4;
+
+                        const r = imgData[i];
+                        const g = imgData[i + 1];
+                        const b = imgData[i + 2];
+
+                        // Convert color to grayscale (luminance formula)
+                        const gray = 0.3 * r + 0.59 * g + 0.11 * b;
+                        
+                        // Shift it up to ensure it's a "light grey"
+                        const baseGrey = Math.min(255, gray + 60); 
+                        
+                        ctx.fillStyle = `rgb(${baseGrey}, ${baseGrey}, ${baseGrey})`;
+                        ctx.strokeStyle = `rgb(${baseGrey}, ${baseGrey}, ${baseGrey})`;
+                        ctx.lineWidth = 1.5;
+
+                        // Draw Triangle 1 (Top-Left half of the square)
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                        ctx.lineTo(x + gridSize, y);
+                        ctx.lineTo(x, y + gridSize);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        // Create a slightly darker shade for the second triangle to give a 3D/faceted look
+                        const shadowGrey = Math.max(0, baseGrey - 20);
+                        ctx.fillStyle = `rgb(${shadowGrey}, ${shadowGrey}, ${shadowGrey})`;
+                        ctx.strokeStyle = `rgb(${shadowGrey}, ${shadowGrey}, ${shadowGrey})`;
+
+                        // Draw Triangle 2 (Bottom-Right half of the square)
+                        ctx.beginPath();
+                        ctx.moveTo(x + gridSize, y);
+                        ctx.lineTo(x + gridSize, y + gridSize);
+                        ctx.lineTo(x, y + gridSize);
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+                }
+            }
+            // Loop the function continuously
+            requestAnimationFrame(processFrame);
+        }
+    </script>
+</body>
+</html>
