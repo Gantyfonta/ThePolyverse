@@ -3,22 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Low-Poly AR Gateway</title>
+    <title>3D Low-Poly AR Gateway</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         body { 
             margin: 0; 
             overflow: hidden; 
-            background-color: #000; 
+            background-color: #111; 
             font-family: sans-serif;
         }
-        canvas { 
-            display: block; 
-            width: 100vw; 
-            height: 100vh; 
-        }
-        #video { 
-            display: none; 
-        }
+        #video { display: none; }
         #ui {
             position: absolute;
             top: 50%;
@@ -27,119 +21,121 @@
             color: white;
             text-align: center;
             pointer-events: none;
+            z-index: 10;
         }
     </style>
 </head>
 <body>
     <div id="ui">
-        <h2 id="status">Accessing Gateway...</h2>
+        <h2 id="status">Accessing 3D Gateway...</h2>
         <p>Please allow camera permissions.</p>
     </div>
+    
     <video id="video" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
-
+    
     <script>
         const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
         const ui = document.getElementById('ui');
 
-        // Dynamically resize canvas to fit the screen
-        function resize() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
-        window.addEventListener('resize', resize);
-        resize();
+        // 1. Setup Three.js Scene, Camera, and Renderer
+        const scene = new THREE.Scene();
+        // Give the background a dark grey fog so the edges fade out
+        scene.fog = new THREE.Fog(0x111111, 20, 100);
 
-        // Offscreen canvas used to sample the raw video colors
-        const offCanvas = document.createElement('canvas');
-        const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, -30, 40);
+        camera.lookAt(0, 0, 0);
 
-        // Request access to the user's rear-facing camera
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // 2. Lighting (Crucial for the 3D low-poly shadows)
+        const ambientLight = new THREE.AmbientLight(0x404040, 1.5); // Soft white light
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(20, 50, 40);
+        scene.add(directionalLight);
+
+        // 3. Create the 3D Plane
+        // 60x40 segments keeps the poly-count low for the aesthetic and performance
+        const segmentsX = 60;
+        const segmentsY = 40;
+        const geometry = new THREE.PlaneGeometry(100, 75, segmentsX, segmentsY);
+        
+        const material = new THREE.MeshStandardMaterial({ 
+            color: 0xaaaaaa, // Light grey base
+            flatShading: true, // THIS is what gives it the crisp, low-poly look!
+            roughness: 0.8,
+            metalness: 0.2
+        });
+
+        const plane = new THREE.Mesh(geometry, material);
+        scene.add(plane);
+
+        // 4. Hidden Canvas to sample video pixels
+        const canvas = document.createElement('canvas');
+        canvas.width = segmentsX + 1; // Match the number of vertices exactly
+        canvas.height = segmentsY + 1;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        // 5. Access the Camera
         navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' }
+            video: { facingMode: 'environment', width: 640, height: 480 }
         }).then(stream => {
             video.srcObject = stream;
             video.play();
-            ui.style.display = 'none'; // Hide loading text
-            requestAnimationFrame(processFrame);
+            ui.style.display = 'none';
+            animate();
         }).catch(err => {
-            document.getElementById('status').innerText = "Gateway Access Denied";
-            console.error("Camera access denied or unavailable: ", err);
+            document.getElementById('status').innerText = "Camera Access Denied";
+            console.error(err);
         });
 
-        const gridSize = 10; // Adjust this to make the polygons larger or smaller
+        // 6. Animation and Displacement Loop
+        function animate() {
+            requestAnimationFrame(animate);
 
-        function processFrame() {
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                offCanvas.width = canvas.width;
-                offCanvas.height = canvas.height;
-                
-                // Scale the video to cover the entire screen
-                const vRatio = canvas.width / video.videoWidth;
-                const hRatio = canvas.height / video.videoHeight;
-                const ratio = Math.max(vRatio, hRatio);
-                const centerShift_x = (canvas.width - video.videoWidth * ratio) / 2;
-                const centerShift_y = (canvas.height - video.videoHeight * ratio) / 2;  
+                // Draw the video frame to our tiny hidden canvas
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 
-                offCtx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight,
-                                 centerShift_x, centerShift_y, video.videoWidth * ratio, video.videoHeight * ratio);
+                const positions = geometry.attributes.position.array;
 
-                // Get pixel data from the hidden video canvas
-                const imgData = offCtx.getImageData(0, 0, canvas.width, canvas.height).data;
-                
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Loop through every vertex on the plane
+                for (let i = 0; i < positions.length / 3; i++) {
+                    const r = imgData[i * 4];
+                    const g = imgData[i * 4 + 1];
+                    const b = imgData[i * 4 + 2];
 
-                // Loop through the screen in a grid to draw the polygons
-                for (let y = 0; y < canvas.height; y += gridSize) {
-                    for (let x = 0; x < canvas.width; x += gridSize) {
-                        
-                        // Sample the pixel right in the middle of our current grid cell
-                        const sampleX = Math.min(x + gridSize / 2, canvas.width - 1);
-                        const sampleY = Math.min(y + gridSize / 2, canvas.height - 1);
-                        const i = (Math.floor(sampleY) * canvas.width + Math.floor(sampleX)) * 4;
+                    // Calculate brightness (0 to 255)
+                    const brightness = (0.3 * r + 0.59 * g + 0.11 * b);
 
-                        const r = imgData[i];
-                        const g = imgData[i + 1];
-                        const b = imgData[i + 2];
-
-                        // Convert color to grayscale (luminance formula)
-                        const gray = 0.3 * r + 0.59 * g + 0.11 * b;
-                        
-                        // Shift it up to ensure it's a "light grey"
-                        const baseGrey = Math.min(255, gray + 60); 
-                        
-                        ctx.fillStyle = `rgb(${baseGrey}, ${baseGrey}, ${baseGrey})`;
-                        ctx.strokeStyle = `rgb(${baseGrey}, ${baseGrey}, ${baseGrey})`;
-                        ctx.lineWidth = 1.5;
-
-                        // Draw Triangle 1 (Top-Left half of the square)
-                        ctx.beginPath();
-                        ctx.moveTo(x, y);
-                        ctx.lineTo(x + gridSize, y);
-                        ctx.lineTo(x, y + gridSize);
-                        ctx.fill();
-                        ctx.stroke();
-
-                        // Create a slightly darker shade for the second triangle to give a 3D/faceted look
-                        const shadowGrey = Math.max(0, baseGrey - 20);
-                        ctx.fillStyle = `rgb(${shadowGrey}, ${shadowGrey}, ${shadowGrey})`;
-                        ctx.strokeStyle = `rgb(${shadowGrey}, ${shadowGrey}, ${shadowGrey})`;
-
-                        // Draw Triangle 2 (Bottom-Right half of the square)
-                        ctx.beginPath();
-                        ctx.moveTo(x + gridSize, y);
-                        ctx.lineTo(x + gridSize, y + gridSize);
-                        ctx.lineTo(x, y + gridSize);
-                        ctx.fill();
-                        ctx.stroke();
-                    }
+                    // Map brightness to Z-axis height (pushing vertices up/down)
+                    // The '15' controls how extreme the 3D spikes are.
+                    positions[i * 3 + 2] = (brightness / 255) * 15; 
                 }
+
+                // Tell Three.js the vertices have moved
+                geometry.attributes.position.needsUpdate = true;
+                // Recompute how light hits the faces so shadows update dynamically
+                geometry.computeVertexNormals(); 
+                
+                // Slowly rotate the plane for a cool 3D perspective effect
+                plane.rotation.z += 0.002;
             }
-            // Loop the function continuously
-            requestAnimationFrame(processFrame);
+
+            renderer.render(scene, camera);
         }
+
+        // Handle resizing
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
     </script>
 </body>
 </html>
